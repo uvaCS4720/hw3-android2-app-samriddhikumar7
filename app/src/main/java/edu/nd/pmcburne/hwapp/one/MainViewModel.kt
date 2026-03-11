@@ -1,90 +1,69 @@
 package edu.nd.pmcburne.hwapp.one
 
-import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
-import edu.nd.pmcburne.hwapp.one.data.ScoreRepo
-import edu.nd.pmcburne.hwapp.one.data.local.Game
+import androidx.lifecycle.viewModelScope
 import java.time.LocalDate
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.SharingStarted
-import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-
 data class ScoreUIState(
     val games: List<Game> = emptyList(),
-    val dateSelected:String= LocalDate.now().toString(),
-    val genderSelected: String = "women",
-    val loading: Boolean = false,
-    val errorMsg: String? = null
+    val dateSelected: String=LocalDate.now().toString(),
+    val genderSelected: String="women",
+    val loading:Boolean =false,
+    val errorMsg:String? =null
 )
-class MainViewModel (private val repo: ScoreRepo, private val stateHandle: SavedStateHandle): ViewModel(){
-    companion object {
-        private const val DATE_KEY="selected_date"
-        private const val GENDER_KEY = "selected_gender"
-    }
-    private val dateSelected=MutableStateFlow(stateHandle[DATE_KEY]?: LocalDate.now().toString())
-    private val genderSelected = MutableStateFlow(stateHandle[GENDER_KEY]?:"women")
-    private val loading= MutableStateFlow(false)
-    private val errorMsg= MutableStateFlow<String?>(null)
-    val uiState: StateFlow<ScoreUIState> =
-        combine(
-            dateSelected,
-            genderSelected,
-            loading,
-            errorMsg,
-            genderSelected.flatMapLatest {gender ->
-                dateSelected.flatMapLatest {date ->
-                    repo.getGamesSaved(gender,date)
-                }
-            }
-        ){date,gender,loadingValue,error,games ->
-            ScoreUIState(
-                games=games,
-                dateSelected=date,
-                genderSelected=gender,
-                loading=loadingValue,
-                errorMsg=error
-            )
-        }.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = ScoreUIState()
-        )
-    init{
+
+class MainViewModel(private val repo:ScoreRepo) :ViewModel() {
+    private val ui = MutableStateFlow(ScoreUIState())
+    val uiState: StateFlow<ScoreUIState> =ui.asStateFlow()
+
+    private var job: Job?=null
+    init {
+        watchGames()
         refresh()
     }
-    fun setDate(date:String){
-        stateHandle[DATE_KEY]=date
-        dateSelected.value=date
+    fun setDate(date: String) {
+        ui.value=ui.value.copy(dateSelected=date)
+        watchGames()
         refresh()
     }
     fun setGender(gender: String) {
-        stateHandle[GENDER_KEY] = gender
-        genderSelected.value = gender
+        ui.value=ui.value.copy(genderSelected =gender)
+        watchGames()
         refresh()
     }
-
     fun refresh() {
         viewModelScope.launch {
-            loading.value = true
-            errorMsg.value = null
+            ui.value = ui.value.copy(
+                loading = true,
+                errorMsg = null
+            )
             try {
-                repo.refreshScore(
-                    gender = genderSelected.value,
-                    date = dateSelected.value
+                repo.refresh(
+                    ui.value.genderSelected,
+                    ui.value.dateSelected
+                )
+            } catch (e: Exception) {
+                ui.value = ui.value.copy(
+                    errorMsg = "Error."
                 )
             }
-            catch(e:Exception){
-                errorMsg.value = "Error."
-            }
-            finally {
-                loading.value = false
+            ui.value = ui.value.copy(loading=false)
+        }
+    }
+    private fun watchGames() {
+        job?.cancel()
+        job = viewModelScope.launch {
+            repo.getGames(
+                ui.value.genderSelected,
+                ui.value.dateSelected
+            ).collect {games ->
+                ui.value=ui.value.copy(games=games)
             }
         }
     }
-
 }
+
